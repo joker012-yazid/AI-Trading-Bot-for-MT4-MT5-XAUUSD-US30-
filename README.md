@@ -1,0 +1,1 @@
+# AI-Trading-Bot-for-MT4-MT5-XAUUSD-US30-
