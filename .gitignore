@@ -1,0 +1,10 @@
+# Bot data secrets and generated artifacts
+botdata/tester/secrets.env
+botdata/logs/
+botdata/reports/
+botdata/*.log
+botdata/**/*.html
+
+# Python cache
+__pycache__/
+*.pyc

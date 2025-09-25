@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Trading Bot Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --panel: #161b22;
+      --accent: #1f6feb;
+      --accent-soft: #388bfd;
+      --danger: #f85149;
+    }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      margin: 2rem;
+      background: var(--bg);
+      color: #e6edf3;
+    }
+    h1 {
+      margin-bottom: 0.5rem;
+    }
+    section {
+      margin-bottom: 2rem;
+      padding: 1.5rem;
+      background: var(--panel);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(1, 4, 9, 0.4);
+    }
+    label {
+      display: block;
+      margin-top: 1rem;
+    }
+    input[type="number"], input[type="file"], select {
+      width: 100%;
+      padding: 0.5rem;
+      margin-top: 0.25rem;
+      background: #0b1016;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: inherit;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.6rem 1.2rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: var(--accent-soft);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 0.5rem;
+      text-align: left;
+      border-bottom: 1px solid #30363d;
+    }
+    canvas {
+      width: 100%;
+      height: 320px;
+    }
+    ul {
+      list-style: disc;
+      margin-left: 1.5rem;
+    }
+    .alert {
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      margin-top: 1rem;
+      display: none;
+    }
+    .alert.danger {
+      background: rgba(248, 81, 73, 0.15);
+      border: 1px solid rgba(248, 81, 73, 0.5);
+      display: block;
+    }
+  </style>
+</head>
+<body data-daily-limit="{{ daily_loss_limit }}" data-base-equity="{{ base_equity }}">
+  <h1>Seni bina Dashboard Bot Dagangan</h1>
+  <p>Isyarat EMA/ATR fokus XAUUSD &amp; US30 dengan pengurusan risiko konservatif dan log UTC.</p>
+
+  <section>
+    <h2>Metrik Prestasi</h2>
+    <p>Asas modal: <strong>{{ base_equity }}</strong> | Had rugi harian: <strong>{{ daily_loss_limit }}%</strong></p>
+    <table>
+      <tbody id="metrics-body">
+        <tr><td>Jumlah Dagangan</td><td id="metrics-trades">-</td></tr>
+        <tr><td>PnL</td><td id="metrics-pnl">-</td></tr>
+        <tr><td>PnL (%)</td><td id="metrics-pnl-pct">-</td></tr>
+        <tr><td>Max Drawdown (%)</td><td id="metrics-max-dd">-</td></tr>
+        <tr><td>Bilangan Hari</td><td id="metrics-days">-</td></tr>
+        <tr><td>PnL Hari Ini (%)</td><td id="metrics-daily-today">-</td></tr>
+        <tr><td>Status Lockout</td><td id="metrics-lockout">-</td></tr>
+      </tbody>
+    </table>
+    <div id="lockout-alert" class="alert">Amaran: Had rugi harian dilanggar. Dagangan mesti dihentikan.</div>
+  </section>
+
+  <section>
+    <h2>Graf PnL Harian</h2>
+    <canvas id="pnlChart" width="900" height="360"></canvas>
+  </section>
+
+  <section>
+    <h2>Senarai Pra-set (.set)</h2>
+    <ul id="preset-list">
+      {% if presets %}
+        {% for preset in presets %}
+          <li>{{ preset }}</li>
+        {% endfor %}
+      {% else %}
+        <li>Tiada pra-set ditemui.</li>
+      {% endif %}
+    </ul>
+    <form id="upload-preset-form">
+      <label for="preset-file">Muat Naik Pra-set (.set)</label>
+      <input id="preset-file" name="file" type="file" accept=".set" required>
+      <button type="submit">Muat Naik Pra-set</button>
+    </form>
+    <p id="preset-upload-status"></p>
+  </section>
+
+  <section>
+    <h2>Muat Naik Kalender Berita</h2>
+    <form id="upload-news-form">
+      <label for="news-file">Fail news.csv</label>
+      <input id="news-file" name="file" type="file" accept=".csv" required>
+      <button type="submit">Muat Naik Berita</button>
+    </form>
+    <p id="news-upload-status"></p>
+  </section>
+
+  <section>
+    <h2>Kawalan Dagangan</h2>
+    <form id="control-form">
+      <label>
+        <input type="checkbox" id="trading_enabled" name="trading_enabled" {% if control.trading_enabled %}checked{% endif %}>
+        Aktifkan Dagangan
+      </label>
+      <label for="risk_percent">Risk Percent (%)</label>
+      <input type="number" id="risk_percent" name="risk_percent" value="{{ control.risk_percent }}" step="0.1" min="0.1">
+      <button type="submit">Simpan Kawalan</button>
+    </form>
+    <p id="control-status"></p>
+  </section>
+
+  <script>
+    const dailyLossLimit = parseFloat(document.body.dataset.dailyLimit);
+
+    async function loadMetrics() {
+      try {
+        const res = await fetch('/api/metrics');
+        if (!res.ok) throw new Error('Metrics unavailable');
+        const data = await res.json();
+        document.getElementById('metrics-trades').textContent = data.trades ?? '-';
+        document.getElementById('metrics-pnl').textContent = data.pnl ?? '-';
+        document.getElementById('metrics-pnl-pct').textContent = data.pnl_pct ?? '-';
+        document.getElementById('metrics-max-dd').textContent = data.max_dd ?? '-';
+        document.getElementById('metrics-days').textContent = data.days ?? '-';
+        document.getElementById('metrics-daily-today').textContent = data.daily_pnl_pct_today ?? '-';
+        document.getElementById('metrics-lockout').textContent = data.lockout_breached ? 'Dilanggar' : 'Normal';
+
+        const alertBox = document.getElementById('lockout-alert');
+        if (typeof data.daily_pnl_pct_today === 'number' && data.daily_pnl_pct_today <= -dailyLossLimit) {
+          alertBox.classList.add('danger');
+        } else if (data.lockout_breached) {
+          alertBox.classList.add('danger');
+        } else {
+          alertBox.classList.remove('danger');
+        }
+      } catch (err) {
+        console.warn(err);
+      }
+    }
+
+    function drawLine(ctx, points, color) {
+      if (!points.length) return;
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      points.forEach((point, idx) => {
+        if (idx === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+      });
+      ctx.stroke();
+    }
+
+    async function loadDaily() {
+      try {
+        const res = await fetch('/api/daily');
+        if (!res.ok) return;
+        const data = await res.json();
+        const canvas = document.getElementById('pnlChart');
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (!data.length) return;
+
+        const padding = 40;
+        const chartHeight = canvas.height - padding * 2;
+        const chartWidth = canvas.width - padding * 2;
+        const maxEquity = Math.max(...data.map(item => item.equity));
+        const minEquity = Math.min(...data.map(item => item.equity));
+        const maxPnl = Math.max(...data.map(item => item.pnl));
+        const minPnl = Math.min(...data.map(item => item.pnl));
+
+        ctx.strokeStyle = '#30363d';
+        ctx.beginPath();
+        ctx.moveTo(padding, padding);
+        ctx.lineTo(padding, canvas.height - padding);
+        ctx.lineTo(canvas.width - padding, canvas.height - padding);
+        ctx.stroke();
+
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '12px sans-serif';
+        data.forEach((item, index) => {
+          const x = padding + (chartWidth / Math.max(1, data.length - 1)) * index;
+          ctx.fillText(item.date, x - 20, canvas.height - padding + 15);
+        });
+
+        const equityPoints = data.map((item, index) => {
+          const x = padding + (chartWidth / Math.max(1, data.length - 1)) * index;
+          const normalized = (item.equity - minEquity) / ((maxEquity - minEquity) || 1);
+          const y = canvas.height - padding - normalized * chartHeight;
+          return { x, y };
+        });
+
+        const pnlPoints = data.map((item, index) => {
+          const x = padding + (chartWidth / Math.max(1, data.length - 1)) * index;
+          const normalized = (item.pnl - minPnl) / ((maxPnl - minPnl) || 1);
+          const y = canvas.height - padding - normalized * chartHeight;
+          return { x, y };
+        });
+
+        drawLine(ctx, equityPoints, '#3fb950');
+        drawLine(ctx, pnlPoints, '#1f6feb');
+
+        ctx.fillStyle = '#3fb950';
+        ctx.fillText('Equity', canvas.width - padding - 60, padding + 15);
+        ctx.fillStyle = '#1f6feb';
+        ctx.fillText('PnL', canvas.width - padding - 60, padding + 30);
+      } catch (err) {
+        console.warn(err);
+      }
+    }
+
+    async function refreshPresets() {
+      try {
+        const res = await fetch('/api/presets');
+        if (!res.ok) return;
+        const data = await res.json();
+        const list = document.getElementById('preset-list');
+        list.innerHTML = '';
+        if (!data.presets || !data.presets.length) {
+          const li = document.createElement('li');
+          li.textContent = 'Tiada pra-set ditemui.';
+          list.appendChild(li);
+          return;
+        }
+        data.presets.forEach((preset) => {
+          const li = document.createElement('li');
+          li.textContent = preset;
+          list.appendChild(li);
+        });
+      } catch (err) {
+        console.warn(err);
+      }
+    }
+
+    document.getElementById('upload-preset-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.target;
+      const formData = new FormData(form);
+      const status = document.getElementById('preset-upload-status');
+      try {
+        const res = await fetch('/upload/preset', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error('Upload failed');
+        const data = await res.json();
+        status.textContent = `Muat naik berjaya: ${data.filename}`;
+        await refreshPresets();
+      } catch (err) {
+        status.textContent = 'Gagal memuat naik pra-set.';
+      }
+      form.reset();
+    });
+
+    document.getElementById('upload-news-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.target;
+      const formData = new FormData(form);
+      const status = document.getElementById('news-upload-status');
+      try {
+        const res = await fetch('/upload/news', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error('Upload failed');
+        const data = await res.json();
+        status.textContent = `Berita dikemas kini: ${data.filename}`;
+      } catch (err) {
+        status.textContent = 'Gagal memuat naik news.csv.';
+      }
+      form.reset();
+    });
+
+    document.getElementById('control-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.target;
+      const formData = new FormData();
+      formData.append('trading_enabled', document.getElementById('trading_enabled').checked ? 'true' : 'false');
+      formData.append('risk_percent', document.getElementById('risk_percent').value);
+      const status = document.getElementById('control-status');
+      try {
+        const res = await fetch('/control', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error('Save failed');
+        status.textContent = 'Kawalan disimpan.';
+      } catch (err) {
+        status.textContent = 'Ralat menyimpan kawalan.';
+      }
+    });
+
+    loadMetrics();
+    loadDaily();
+    refreshPresets();
+    setInterval(loadMetrics, 30000);
+    setInterval(loadDaily, 60000);
+  </script>
+</body>
+</html>
